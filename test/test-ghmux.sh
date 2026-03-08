@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
 bin_path="$repo_root/bin/ghmux"
+credential_bin_path="$repo_root/bin/git-credential-ghmux"
 
 fail() {
   printf 'not ok - %s\n' "$*" >&2
@@ -59,6 +60,48 @@ make_stub_gh() {
   printf '%s\n' '    esac' >> "$path"
   printf '%s\n' '  done' >> "$path"
   printf '%s\n' '  printf "TOKEN:%s:%s\n" "$host" "$user"' >> "$path"
+  printf '%s\n' '  exit 0' >> "$path"
+  printf '%s\n' 'fi' >> "$path"
+  printf '%s\n' 'env | sort' >> "$path"
+  chmod +x "$path"
+}
+
+make_stub_real_gh() {
+  local path="$1"
+  local active_user="${2:-default-user}"
+
+  mkdir -p -- "$(dirname -- "$path")"
+  printf '%s\n' '#!/usr/bin/env bash' > "$path"
+  printf '%s\n' 'set -euo pipefail' >> "$path"
+  printf '%s\n' "active_user='$active_user'" >> "$path"
+  printf '%s\n' 'if [[ "${1:-}" == "auth" && "${2:-}" == "token" ]]; then' >> "$path"
+  printf '%s\n' '  shift 2' >> "$path"
+  printf '%s\n' '  host=""' >> "$path"
+  printf '%s\n' '  user=""' >> "$path"
+  printf '%s\n' '  while (($#)); do' >> "$path"
+  printf '%s\n' '    case "$1" in' >> "$path"
+  printf '%s\n' '      --hostname)' >> "$path"
+  printf '%s\n' '        host="$2"' >> "$path"
+  printf '%s\n' '        shift 2' >> "$path"
+  printf '%s\n' '        ;;' >> "$path"
+  printf '%s\n' '      --user)' >> "$path"
+  printf '%s\n' '        user="$2"' >> "$path"
+  printf '%s\n' '        shift 2' >> "$path"
+  printf '%s\n' '        ;;' >> "$path"
+  printf '%s\n' '      *)' >> "$path"
+  printf '%s\n' '        shift' >> "$path"
+  printf '%s\n' '        ;;' >> "$path"
+  printf '%s\n' '    esac' >> "$path"
+  printf '%s\n' '  done' >> "$path"
+  printf '%s\n' '  printf "TOKEN:%s:%s\n" "$host" "$user"' >> "$path"
+  printf '%s\n' '  exit 0' >> "$path"
+  printf '%s\n' 'fi' >> "$path"
+  printf '%s\n' 'if [[ "${1:-}" == "auth" && "${2:-}" == "git-credential" ]]; then' >> "$path"
+  printf '%s\n' '  while IFS= read -r line; do' >> "$path"
+  printf '%s\n' '    [[ -z "$line" ]] && break' >> "$path"
+  printf '%s\n' '  done' >> "$path"
+  printf '%s\n' '  printf "username=%s\n" "$active_user"' >> "$path"
+  printf '%s\n' '  printf "password=DEFAULT:%s\n" "$active_user"' >> "$path"
   printf '%s\n' '  exit 0' >> "$path"
   printf '%s\n' 'fi' >> "$path"
   printf '%s\n' 'env | sort' >> "$path"
@@ -179,8 +222,56 @@ test_auth_login_blocked_in_routed_context() {
   pass "auth login blocked in routed context"
 }
 
-bash -n "$bin_path" "$repo_root/lib/ghmux.sh"
+test_git_credential_helper_passthrough_without_matching_rule() {
+  local tmp
+  local stub
+  local output
+
+  tmp=$(mktemp -d)
+  trap 'rm -rf -- "$tmp"' RETURN
+  stub="$tmp/stub-gh"
+
+  make_stub_real_gh "$stub" "default-user"
+  mkdir -p "$tmp/outside"
+
+  output=$(cd "$tmp/outside" && HOME="$tmp/home" XDG_CONFIG_HOME="$tmp/xdg" GHMUX_REAL_GH="$stub" \
+    bash -lc "printf 'protocol=https\nhost=github.com\n\n' | '$credential_bin_path' get")
+
+  if [[ -n "$output" ]]; then
+    fail "expected no credentials when no ghmux rule matches"
+  fi
+  pass "git credential helper passthrough without matching rule"
+}
+
+test_git_credential_helper_returns_routed_credentials() {
+  local tmp
+  local stub
+  local config
+  local worktree
+  local output
+
+  tmp=$(mktemp -d)
+  trap 'rm -rf -- "$tmp"' RETURN
+  stub="$tmp/stub-gh"
+  config="$tmp/xdg/ghmux/config.sh"
+  worktree="$tmp/work/project"
+
+  make_stub_real_gh "$stub" "default-user"
+  write_config "$config" "$tmp/work|github.com|alice"
+  mkdir -p "$worktree"
+
+  output=$(cd "$worktree" && HOME="$tmp/home" XDG_CONFIG_HOME="$tmp/xdg" GHMUX_REAL_GH="$stub" \
+    bash -lc "printf 'protocol=https\nhost=github.com\n\n' | '$credential_bin_path' get")
+
+  assert_contains "$output" "username=x-access-token" "expected access token username in credential helper response"
+  assert_contains "$output" "password=TOKEN:github.com:alice" "expected routed token in credential helper response"
+  pass "git credential helper returns routed credentials"
+}
+
+bash -n "$bin_path" "$credential_bin_path" "$repo_root/lib/ghmux.sh"
 test_passthrough_without_matching_rule
 test_matching_rule_injects_token
 test_longest_prefix_wins
 test_auth_login_blocked_in_routed_context
+test_git_credential_helper_passthrough_without_matching_rule
+test_git_credential_helper_returns_routed_credentials

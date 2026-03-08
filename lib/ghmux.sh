@@ -169,6 +169,12 @@ ghmux_select_route() {
   ghmux_default_route
 }
 
+ghmux_current_route() {
+  local cwd
+  cwd=$(ghmux_current_cwd)
+  ghmux_select_route "$cwd"
+}
+
 ghmux_fetch_token() {
   local real_gh="$1"
   local host="$2"
@@ -200,6 +206,29 @@ ghmux_apply_route_env() {
   export GH_TOKEN="$token"
   export GITHUB_TOKEN="$token"
   unset GH_CONFIG_DIR
+}
+
+ghmux_route_credentials() {
+  local real_gh="$1"
+  local route="$2"
+  local route_prefix=""
+  local route_host=""
+  local route_user=""
+  local token=""
+
+  IFS='|' read -r route_prefix route_host route_user <<< "$route"
+
+  if [[ -z "$route_user" ]]; then
+    return 0
+  fi
+
+  token=$(ghmux_fetch_token "$real_gh" "$route_host" "$route_user")
+  if [[ -z "$token" ]]; then
+    ghmux_die "unable to resolve token for user '$route_user' on host '$route_host'"
+  fi
+
+  printf 'username=x-access-token\n'
+  printf 'password=%s\n' "$token"
 }
 
 ghmux_guard_auth_command() {
@@ -254,4 +283,44 @@ ghmux_main() {
   ghmux_log "real_gh=$real_gh"
 
   exec "$real_gh" "$@"
+}
+
+ghmux_read_credential_request() {
+  local line=""
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -z "$line" ]] && break
+  done
+  return 0
+}
+
+ghmux_git_credential_main() {
+  local operation="${1:-get}"
+  local route
+  local real_gh
+  local route_prefix=""
+  local route_host=""
+  local route_user=""
+
+  ghmux_read_credential_request
+
+  case "$operation" in
+    get|fill)
+      route=$(ghmux_current_route)
+      IFS='|' read -r route_prefix route_host route_user <<< "$route"
+      real_gh=$(ghmux_resolve_real_gh)
+
+      ghmux_log "credential prefix=$route_prefix"
+      ghmux_log "credential host=$route_host"
+      ghmux_log "credential user=$route_user"
+      ghmux_log "credential real_gh=$real_gh"
+
+      ghmux_route_credentials "$real_gh" "$route"
+      ;;
+    store|approve|erase|reject)
+      return 0
+      ;;
+    *)
+      ghmux_die "unsupported git credential operation '$operation'"
+      ;;
+  esac
 }
