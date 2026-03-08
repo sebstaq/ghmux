@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+
+# ghmux loads this file from:
+#   $XDG_CONFIG_HOME/ghmux/config.sh
+# or:
+#   ~/.config/ghmux/config.sh
+#
+# Each rule is:
+#   "/absolute/path/prefix|host|github-username"
+#
+# The longest matching path prefix wins.
+
+GHMUX_DEFAULT_HOST=github.com
+GHMUX_DEFAULT_USER=
+
+GHMUX_RULES=(
+  "$HOME/src/work|github.com|work-account"
+  "$HOME/src/client-a|github.com|client-a-bot"
+)

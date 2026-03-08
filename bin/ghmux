@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+export GHMUX_SELF_PATH
+GHMUX_SELF_PATH=$(realpath -- "${BASH_SOURCE[0]}")
+
+# shellcheck source=../lib/ghmux.sh
+source "$script_dir/../lib/ghmux.sh"
+
+ghmux_main "$@"
